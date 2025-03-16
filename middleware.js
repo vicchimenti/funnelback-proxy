@@ -12,7 +12,6 @@ const LIMITS = {
 };
 
 // We'll manually clean the cache after each request
-// since we can't use setInterval in edge functions
 function cleanupCache() {
   const now = Date.now();
   for (const [key, value] of ipCache.entries()) {
@@ -29,14 +28,16 @@ export default async function middleware(request) {
   const url = new URL(request.url);
   const path = url.pathname;
   
-  // Handle OPTIONS requests (preflight) specially to maintain CORS
+  // Handle OPTIONS requests specially to maintain CORS
   if (request.method === 'OPTIONS') {
-    // Let the actual handlers deal with OPTIONS requests
     return fetch(request);
   }
+
+  // Extract client IP from various headers, prioritizing the most likely to be accurate
+  const clientIp = request.headers.get('x-real-ip') || 
+                   request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 
+                   'unknown';
   
-  // Get client IP
-  const ip = request.headers.get('x-forwarded-for') || 'unknown';
   const now = Date.now();
   
   // Determine appropriate rate limit based on endpoint type
@@ -53,14 +54,14 @@ export default async function middleware(request) {
   }
   
   // Initialize or get current rate limit data
-  if (!ipCache.has(ip)) {
-    ipCache.set(ip, {
+  if (!ipCache.has(clientIp)) {
+    ipCache.set(clientIp, {
       count: 0,
       resetTime: now + WINDOW_MS
     });
   }
   
-  const rateData = ipCache.get(ip);
+  const rateData = ipCache.get(clientIp);
   
   // Reset counter if time window has elapsed
   if (now > rateData.resetTime) {
@@ -100,13 +101,37 @@ export default async function middleware(request) {
     return response;
   }
   
-  // For successful requests, proceed with the original request
-  const response = await fetch(request);
+  // Clone the request with the original client IP preserved
+  const requestHeaders = new Headers(request.headers);
   
-  // Clone the response to be able to modify headers
+  // Explicitly set clean headers for downstream functions
+  requestHeaders.set('x-original-client-ip', clientIp);
+  
+  // Preserve any sessionId in the URL parameters
+  if (url.searchParams.has('sessionId')) {
+    requestHeaders.set('x-session-id', url.searchParams.get('sessionId'));
+  } else if (!url.searchParams.has('sessionId')) {
+    // Generate a unique session ID if one doesn't exist
+    const generatedSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;    
+    requestHeaders.set('x-session-id', generatedSessionId);
+  }
+  
+  // Create a new request with modified headers
+  const newRequest = new Request(url, {
+    method: request.method,
+    headers: requestHeaders,
+    body: request.body,
+    redirect: request.redirect,
+    signal: request.signal
+  });
+  
+  // For successful requests, proceed with the modified request
+  const response = await fetch(newRequest);
+  
+  // Clone the response to modify headers
   const newResponse = new Response(response.body, response);
   
-  // Add rate limit information to headers without disturbing existing ones
+  // Add rate limit information to headers
   newResponse.headers.set('X-RateLimit-Limit', rateLimit.toString());
   newResponse.headers.set('X-RateLimit-Remaining', (rateLimit - rateData.count).toString());
   newResponse.headers.set('X-RateLimit-Reset', rateData.resetTime.toString());
