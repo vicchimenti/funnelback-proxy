@@ -15,13 +15,20 @@
  * - Analytics integration
  * 
  * @author Victor Chimenti
- * @version 3.0.2
+ * @version 3.1.2
+ * @lastModified 2025-03-16
  * @license MIT
  */
 
 const axios = require('axios');
 const os = require('os');
+const { getLocationData } = require('../lib/geoIpService');
 const { recordQuery } = require('../lib/queryAnalytics');
+const { 
+    createStandardAnalyticsData, 
+    sanitizeSessionId, 
+    logAnalyticsData 
+} = require('../lib/schemaHandler');  
 
 /**
  * Creates a standardized log entry for Vercel environment
@@ -116,7 +123,10 @@ function cleanTitle(title = '') {
 async function handler(req, res) {
     const startTime = Date.now();
     const requestId = req.headers['x-vercel-id'] || Date.now().toString();
-    const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const userIp = req.headers['x-original-client-ip'] || 
+        (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
+        (req.headers['x-real-ip']) || 
+        req.socket.remoteAddress;
 
     // CORS handling for Seattle University domain
     res.setHeader('Access-Control-Allow-Origin', 'https://www.seattleu.edu');
@@ -188,6 +198,16 @@ async function handler(req, res) {
             headers: req.headers,
         });
 
+        const sessionId = sanitizeSessionId(req.query.sessionId || req.headers['x-session-id']);
+        console.log('Session ID sources:', {
+            fromQueryParam: req.query.sessionId,
+            fromHeader: req.headers['x-session-id'],
+            fromBody: req.body?.sessionId,
+            afterSanitization: sessionId
+        });
+
+        const locationData = await getLocationData(userIp);
+
         // Record analytics data
         try {
             console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
@@ -195,30 +215,32 @@ async function handler(req, res) {
             if (process.env.MONGODB_URI) {
                 console.log('Raw query parameters:', req.query);
                 
-                const analyticsData = {
+                const rawData = {
                     handler: 'suggestPeople',
                     query: req.query.query || '[empty query]',
                     searchCollection: 'seattleu~sp-search',
                     userIp: userIp,
                     userAgent: req.headers['user-agent'],
                     referer: req.headers.referer,
-                    city: decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
-                    region: req.headers['x-vercel-ip-country-region'],
-                    country: req.headers['x-vercel-ip-country'],
-                    timezone: req.headers['x-vercel-ip-timezone'],
-                    latitude: req.headers['x-vercel-ip-latitude'],
-                    longitude: req.headers['x-vercel-ip-longitude'],
+                    city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
+                    region: locationData.region || req.headers['x-vercel-ip-country-region'],
+                    country: locationData.country || req.headers['x-vercel-ip-country'],
+                    timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
+                    latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
+                    longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                     responseTime: processingTime,
                     resultCount: resultCount,
                     isStaffTab: true,  // This is specifically for staff searches
                     tabs: ['Faculty & Staff'],
+                    sessionId: sessionId,
                     timestamp: new Date()
                 };
                 
-                // Log analytics data (excluding sensitive info)
-                const loggableData = { ...analyticsData };
-                delete loggableData.userIp;
-                console.log('Analytics data prepared for recording:', loggableData);
+                // Standardize data to ensure consistent schema
+                const analyticsData = createStandardAnalyticsData(rawData);
+                
+                // Log data (excluding sensitive information)
+                logAnalyticsData(analyticsData, 'suggestPeople recording');
                 
                 // Record the analytics
                 try {
