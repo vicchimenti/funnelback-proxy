@@ -17,13 +17,14 @@
 * - Consistent schema handling
 * 
 * @author Victor Chimenti
-* @version 3.0.0
+* @version 3.2.1
 * @license MIT
-* @lastModified 2025-03-06
+* @lastModified 2025-03-16
 */
 
 const axios = require('axios');
 const os = require('os');
+const { getLocationData } = require('../lib/geoIpService');
 const { recordQuery } = require('../lib/queryAnalytics');
 const { 
     createStandardAnalyticsData, 
@@ -205,7 +206,20 @@ async function handler(req, res) {
    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-   const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+   const userIp = req.headers['x-original-client-ip'] || 
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
+    (req.headers['x-real-ip']) || 
+    req.socket.remoteAddress;
+
+    // Add debug logging
+    console.log('IP Headers:', {
+        originalClientIp: req.headers['x-original-client-ip'],
+        forwardedFor: req.headers['x-forwarded-for'],
+        realIp: req.headers['x-real-ip'],
+        socketRemote: req.socket.remoteAddress,
+        vercelIpCity: req.headers['x-vercel-ip-city'],
+        finalUserIp: userIp
+    });
 
    if (req.method === 'OPTIONS') {
        logEvent('info', 'OPTIONS request', { 
@@ -257,9 +271,16 @@ async function handler(req, res) {
         
         if (process.env.MONGODB_URI) {
             // Extract and sanitize session ID
-            const sessionId = sanitizeSessionId(req.query.sessionId);
-            console.log('Extracted session ID:', sessionId);
-            
+            const sessionId = sanitizeSessionId(req.query.sessionId || req.headers['x-session-id']);
+            console.log('Session ID sources:', {
+                fromQueryParam: req.query.sessionId,
+                fromHeader: req.headers['x-session-id'],
+                fromBody: req.body?.sessionId,
+                afterSanitization: sessionId
+            });
+
+            const locationData = await getLocationData(userIp);
+
             // Create raw analytics data
             const rawData = {
                 handler: 'suggest',
@@ -268,12 +289,12 @@ async function handler(req, res) {
                 userIp: userIp,
                 userAgent: req.headers['user-agent'],
                 referer: req.headers.referer,
-                city: decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
-                region: req.headers['x-vercel-ip-country-region'],
-                country: req.headers['x-vercel-ip-country'],
-                timezone: req.headers['x-vercel-ip-timezone'],
-                latitude: req.headers['x-vercel-ip-latitude'],
-                longitude: req.headers['x-vercel-ip-longitude'],
+                city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
+                region: locationData.region || req.headers['x-vercel-ip-country-region'],
+                country: locationData.country || req.headers['x-vercel-ip-country'],
+                timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
+                latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
+                longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                 responseTime: processingTime,
                 resultCount: enrichedResponse.length || 0,
                 hasResults: enrichedResponse.length > 0,
