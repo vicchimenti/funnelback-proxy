@@ -14,12 +14,14 @@
  * - Consistent schema handling
  * 
  * @author Victor Chimenti
- * @version 3.0.1
+ * @version 4.0.0
+ * @namespace server default
  * @license MIT
- * @lastModified 2025-03-06
+ * @lastModified 2025-03-17
  */
 
 const axios = require('axios');
+const { getLocationData } = require('../lib/geoIpService');
 const { recordQuery } = require('../lib/queryAnalytics');
 const { 
     createStandardAnalyticsData, 
@@ -58,17 +60,15 @@ function extractResultCount(htmlContent) {
  */
 async function handler(req, res) {
     const startTime = Date.now();
-    // Enable CORS for Seattle University domain
+
     res.setHeader('Access-Control-Allow-Origin', 'https://www.seattleu.edu');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    // Log request details
-    const userIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    console.log('Main Search Request:');
-    console.log('- User IP:', userIp);
-    console.log('- Query Parameters:', req.query);
-    console.log('- Request Headers:', req.headers);
+    
+    const userIp = req.headers['x-original-client-ip'] || 
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
+    (req.headers['x-real-ip']) || 
+    req.socket.remoteAddress;
 
     if (req.method === 'OPTIONS') {
         res.status(200).end();
@@ -86,16 +86,24 @@ async function handler(req, res) {
             ...req.query
         };
 
-        console.log('Making Funnelback request:');
-        console.log('- URL:', funnelbackUrl);
-        console.log('- Parameters:', params);
+        const locationData = await getLocationData(userIp);
+        console.log('GeoIP location data:', locationData);
+
+        const funnelbackHeaders = {
+            'Accept': 'text/html',
+            'X-Forwarded-For': userIp,
+            'X-Geo-City': locationData.city,
+            'X-Geo-Region': locationData.region,
+            'X-Geo-Country': locationData.country,
+            'X-Geo-Timezone': locationData.timezone,
+            'X-Geo-Latitude': locationData.latitude,
+            'X-Geo-Longitude': locationData.longitude
+        };
+        console.log('- Outgoing Headers to Funnelback (with actual user location):', funnelbackHeaders);
 
         const response = await axios.get(funnelbackUrl, {
             params: params,
-            headers: {
-                'Accept': 'text/html',
-                'X-Forwarded-For': userIp
-            }
+            headers: funnelbackHeaders
         });
 
         console.log('Funnelback response received successfully');
@@ -110,9 +118,14 @@ async function handler(req, res) {
             
             if (process.env.MONGODB_URI) {
                 // Extract and sanitize session ID
-                const sessionId = sanitizeSessionId(req.query.sessionId);
-                console.log('Extracted session ID:', sessionId);
-                
+                const sessionId = sanitizeSessionId(req.query.sessionId || req.headers['x-session-id']);
+                console.log('Session ID sources:', {
+                    fromQueryParam: req.query.sessionId,
+                    fromHeader: req.headers['x-session-id'],
+                    fromBody: req.body?.sessionId,
+                    afterSanitization: sessionId
+                });
+
                 // Create raw analytics data
                 const rawData = {
                     handler: 'server',
@@ -121,12 +134,12 @@ async function handler(req, res) {
                     userIp: userIp,
                     userAgent: req.headers['user-agent'],
                     referer: req.headers.referer,
-                    city: decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
-                    region: req.headers['x-vercel-ip-country-region'],
-                    country: req.headers['x-vercel-ip-country'],
-                    timezone: req.headers['x-vercel-ip-timezone'],
-                    latitude: req.headers['x-vercel-ip-latitude'],
-                    longitude: req.headers['x-vercel-ip-longitude'],
+                    city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
+                    region: locationData.region || req.headers['x-vercel-ip-country-region'],
+                    country: locationData.country || req.headers['x-vercel-ip-country'],
+                    timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
+                    latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
+                    longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                     responseTime: processingTime,
                     resultCount: resultCount,
                     hasResults: resultCount > 0,

@@ -17,9 +17,10 @@
 * - Consistent schema handling
 * 
 * @author Victor Chimenti
-* @version 3.2.1
+* @version 4.0.0
+* @module suggestionHandler
 * @license MIT
-* @lastModified 2025-03-16
+* @lastModified 2025-03-17
 */
 
 const axios = require('axios');
@@ -230,39 +231,45 @@ async function handler(req, res) {
        return;
    }
 
+   const locationData = await getLocationData(userIp);
+   console.log('GeoIP location data:', locationData);
+
    try {
-       const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/suggest.json';
-       
-       logEvent('info', 'Request received', {
-           query: req.query,
-           requestId,
-           headers: req.headers
-       });
+        const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/suggest.json';
 
-       const response = await axios.get(funnelbackUrl, {
-        params: req.query,
-        headers: {
-            'Accept': 'application/json',
-            'X-Forwarded-For': userIp
-        }
-    });
+        const funnelbackHeaders = {
+            'Accept': 'text/html',
+            'X-Forwarded-For': userIp,
+            'X-Geo-City': locationData.city,
+            'X-Geo-Region': locationData.region,
+            'X-Geo-Country': locationData.country,
+            'X-Geo-Timezone': locationData.timezone,
+            'X-Geo-Latitude': locationData.latitude,
+            'X-Geo-Longitude': locationData.longitude
+        };
+        console.log('- Outgoing Headers to Funnelback:', funnelbackHeaders);
 
-    // Ensure response data is an array (handle API inconsistencies)
-    const responseData = Array.isArray(response.data) ? response.data : [];
+        const response = await axios.get(funnelbackUrl, {
+            params: req.query,
+            headers: funnelbackHeaders
+        });
 
-    // Enrich suggestions with metadata
-    const enrichedResponse = enrichSuggestions(responseData, req.query);
-    
-    // Process time for this request
-    const processingTime = Date.now() - startTime;
+        // Ensure response data is an array (handle API inconsistencies)
+        const responseData = Array.isArray(response.data) ? response.data : [];
 
-    logEvent('info', 'Response enriched', {
-        status: response.status,
-        processingTime: `${processingTime}ms`,
-        suggestionsCount: enrichedResponse.length || 0,
-        query: req.query,
-        headers: req.headers
-    });
+        // Enrich suggestions with metadata
+        const enrichedResponse = enrichSuggestions(responseData, req.query);
+
+        // Process time for this request
+        const processingTime = Date.now() - startTime;
+
+        logEvent('info', 'Response enriched', {
+            status: response.status,
+            processingTime: `${processingTime}ms`,
+            suggestionsCount: enrichedResponse.length || 0,
+            query: req.query,
+            headers: req.headers
+        });
 
     // Record query data for analytics with enhanced debugging
     try {
@@ -278,8 +285,6 @@ async function handler(req, res) {
                 fromBody: req.body?.sessionId,
                 afterSanitization: sessionId
             });
-
-            const locationData = await getLocationData(userIp);
 
             // Create raw analytics data
             const rawData = {
