@@ -19,9 +19,10 @@
  * - Session tracking
  * 
  * @author Victor Chimenti
- * @version 3.1.1
+ * @version 4.1.0
+ * @namespace suggestPrograms
  * @license MIT
- * @lastModified 2025-03-16
+ * @lastModified 2025-03-18
  */
 
 const axios = require('axios');
@@ -111,7 +112,7 @@ function logEvent(level, message, data = {}) {
 
     const logEntry = {
         service: 'suggest-programs',
-        version: '3.1.1',
+        version: '4.1.0',
         timestamp: new Date().toISOString(),
         level,
         message,
@@ -215,6 +216,10 @@ async function handler(req, res) {
         return;
     }
 
+    // Get location data based on the user's IP
+    const locationData = await getLocationData(userIp);
+    console.log('GeoIP location data:', locationData);
+
     try {
         const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/search.json';
         
@@ -224,14 +229,20 @@ async function handler(req, res) {
             headers: req.headers
         });
 
-        // Make the request with explicit JSON headers
+        const funnelbackHeaders = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-Forwarded-For': userIp,
+            'X-Geo-City': locationData.city,
+            'X-Geo-Region': locationData.region,
+            'X-Geo-Country': locationData.country,
+            'X-Geo-Timezone': locationData.timezone
+        };
+        console.log('- Outgoing Headers to Funnelback:', funnelbackHeaders);
+
         const response = await axios.get(funnelbackUrl, {
             params: query,
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'X-Forwarded-For': userIp
-            }
+            headers: funnelbackHeaders
         });
 
         // Log the actual URL we're hitting
@@ -285,10 +296,6 @@ async function handler(req, res) {
             fromBody: req.body?.sessionId,
             afterSanitization: sessionId
         });
-        
-        // Get location data based on the user's IP
-        const locationData = await getLocationData(userIp);
-        console.log('GeoIP location data:', locationData);
 
         // Record analytics data
         try {
@@ -302,16 +309,12 @@ async function handler(req, res) {
                     handler: 'suggestPrograms',
                     query: req.query.query || '[empty query]',
                     searchCollection: 'seattleu~ds-programs',
-                    userIp: userIp,
                     userAgent: req.headers['user-agent'],
                     referer: req.headers.referer,
-                    // Use GeoIP location data with Vercel's data as fallback
                     city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
                     region: locationData.region || req.headers['x-vercel-ip-country-region'],
                     country: locationData.country || req.headers['x-vercel-ip-country'],
                     timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
-                    latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
-                    longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                     responseTime: processingTime,
                     resultCount: resultCount,
                     hasResults: resultCount > 0,

@@ -17,9 +17,10 @@
 * - Consistent schema handling
 * 
 * @author Victor Chimenti
-* @version 3.2.1
+* @version 4.1.0
+* @namespace suggestionHandler
 * @license MIT
-* @lastModified 2025-03-16
+* @lastModified 2025-03-18
 */
 
 const axios = require('axios');
@@ -31,8 +32,6 @@ const {
     sanitizeSessionId, 
     logAnalyticsData 
 } = require('../lib/schemaHandler');
-
-// Don't initialize MongoDB connection here - we'll handle that in the recordQuery function
 
 /**
 * Creates a standardized log entry for Vercel environment
@@ -230,39 +229,43 @@ async function handler(req, res) {
        return;
    }
 
+   const locationData = await getLocationData(userIp);
+   console.log('GeoIP location data:', locationData);
+
    try {
-       const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/suggest.json';
-       
-       logEvent('info', 'Request received', {
-           query: req.query,
-           requestId,
-           headers: req.headers
-       });
+        const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/suggest.json';
 
-       const response = await axios.get(funnelbackUrl, {
-        params: req.query,
-        headers: {
-            'Accept': 'application/json',
-            'X-Forwarded-For': userIp
-        }
-    });
+        const funnelbackHeaders = {
+            'Accept': 'text/html',
+            'X-Forwarded-For': userIp,
+            'X-Geo-City': locationData.city,
+            'X-Geo-Region': locationData.region,
+            'X-Geo-Country': locationData.country,
+            'X-Geo-Timezone': locationData.timezone
+        };
+        console.log('- Outgoing Headers to Funnelback:', funnelbackHeaders);
 
-    // Ensure response data is an array (handle API inconsistencies)
-    const responseData = Array.isArray(response.data) ? response.data : [];
+        const response = await axios.get(funnelbackUrl, {
+            params: req.query,
+            headers: funnelbackHeaders
+        });
 
-    // Enrich suggestions with metadata
-    const enrichedResponse = enrichSuggestions(responseData, req.query);
-    
-    // Process time for this request
-    const processingTime = Date.now() - startTime;
+        // Ensure response data is an array (handle API inconsistencies)
+        const responseData = Array.isArray(response.data) ? response.data : [];
 
-    logEvent('info', 'Response enriched', {
-        status: response.status,
-        processingTime: `${processingTime}ms`,
-        suggestionsCount: enrichedResponse.length || 0,
-        query: req.query,
-        headers: req.headers
-    });
+        // Enrich suggestions with metadata
+        const enrichedResponse = enrichSuggestions(responseData, req.query);
+
+        // Process time for this request
+        const processingTime = Date.now() - startTime;
+
+        logEvent('info', 'Response enriched', {
+            status: response.status,
+            processingTime: `${processingTime}ms`,
+            suggestionsCount: enrichedResponse.length || 0,
+            query: req.query,
+            headers: req.headers
+        });
 
     // Record query data for analytics with enhanced debugging
     try {
@@ -279,22 +282,17 @@ async function handler(req, res) {
                 afterSanitization: sessionId
             });
 
-            const locationData = await getLocationData(userIp);
-
             // Create raw analytics data
             const rawData = {
                 handler: 'suggest',
                 query: req.query.query || req.query.partial_query || '[empty query]',
                 collection: req.query.collection || 'seattleu~sp-search',
-                userIp: userIp,
                 userAgent: req.headers['user-agent'],
                 referer: req.headers.referer,
                 city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
                 region: locationData.region || req.headers['x-vercel-ip-country-region'],
                 country: locationData.country || req.headers['x-vercel-ip-country'],
                 timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
-                latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
-                longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                 responseTime: processingTime,
                 resultCount: enrichedResponse.length || 0,
                 hasResults: enrichedResponse.length > 0,

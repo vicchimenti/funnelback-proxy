@@ -15,8 +15,9 @@
  * - Analytics integration
  * 
  * @author Victor Chimenti
- * @version 3.1.2
- * @lastModified 2025-03-16
+ * @version 4.1.0
+ * @namespace suggestPeople
+ * @lastmodified 2025-03-18
  * @license MIT
  */
 
@@ -82,7 +83,7 @@ function logEvent(level, message, data = {}) {
 
     const logEntry = {
         service: 'suggest-people',
-        logVersion: '3.0.2',
+        logVersion: '4.1.0',
         timestamp: new Date().toISOString(),
         event: {
             level,
@@ -138,6 +139,9 @@ async function handler(req, res) {
         return;
     }
 
+    const locationData = await getLocationData(userIp);
+    console.log('GeoIP location data:', locationData);
+
     try {
         const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/search.json';
         
@@ -174,12 +178,21 @@ async function handler(req, res) {
         });
 
         console.log('DEBUG - Making request to Funnelback with URL:', url);
+
+        const funnelbackHeaders = {
+            'Accept': 'text/html',
+            'X-Forwarded-For': userIp,
+            'X-Geo-City': locationData.city,
+            'X-Geo-Region': locationData.region,
+            'X-Geo-Country': locationData.country,
+            'X-Geo-Timezone': locationData.timezone
+        };
+        console.log('- Outgoing Headers to Funnelback:', funnelbackHeaders);
+
         const response = await axios.get(url, {
-            headers: {
-                'Accept': 'application/json',
-                'X-Forwarded-For': userIp
-            }
+            headers: funnelbackHeaders
         });
+
         console.log('DEBUG - Response status:', response.status);
         console.log('DEBUG - Response data type:', response.data?.response?.resultPacket?.results ? 'Has results' : 'No results');
         console.log('DEBUG - Number of results:', response.data?.response?.resultPacket?.results?.length || 0);
@@ -206,7 +219,7 @@ async function handler(req, res) {
             afterSanitization: sessionId
         });
 
-        const locationData = await getLocationData(userIp);
+
 
         // Record analytics data
         try {
@@ -219,15 +232,12 @@ async function handler(req, res) {
                     handler: 'suggestPeople',
                     query: req.query.query || '[empty query]',
                     searchCollection: 'seattleu~sp-search',
-                    userIp: userIp,
                     userAgent: req.headers['user-agent'],
                     referer: req.headers.referer,
                     city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
                     region: locationData.region || req.headers['x-vercel-ip-country-region'],
                     country: locationData.country || req.headers['x-vercel-ip-country'],
                     timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
-                    latitude: locationData.latitude || req.headers['x-vercel-ip-latitude'],
-                    longitude: locationData.longitude || req.headers['x-vercel-ip-longitude'],
                     responseTime: processingTime,
                     resultCount: resultCount,
                     isStaffTab: true,  // This is specifically for staff searches
