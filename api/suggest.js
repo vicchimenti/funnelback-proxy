@@ -3,10 +3,11 @@
 * 
 * Handles autocomplete suggestion requests for the Funnelback integration.
 * Provides real-time search suggestions as users type, with structured logging
-* for Vercel serverless environment.
+* for Vercel serverless environment. Added caching with Vercel native Redis.
 * 
 * Features:
 * - CORS handling for Seattle University domain
+* - Redis Caching for improved performance and reduced latency
 * - Structured JSON logging for Vercel
 * - Request/Response tracking with detailed headers
 * - Query parameter tracking
@@ -17,10 +18,11 @@
 * - Consistent schema handling
 * 
 * @author Victor Chimenti
-* @version 4.1.0
+* @version 5.0.0
 * @namespace suggestionHandler
+* @environment production
 * @license MIT
-* @lastModified 2025-03-18
+* @lastModified 2025-03-23
 */
 
 const axios = require('axios');
@@ -32,6 +34,16 @@ const {
     sanitizeSessionId, 
     logAnalyticsData 
 } = require('../lib/schemaHandler');
+const { 
+    getCachedData, 
+    setCachedData, 
+    isCachingEnabled,
+    logCacheCheck,
+    logCacheHit,
+    logCacheMiss,
+    logCacheError,
+    logCacheSet
+} = require('../lib/cacheService');
 
 /**
 * Creates a standardized log entry for Vercel environment
@@ -44,10 +56,9 @@ const {
 * @param {number} [data.status] - HTTP status code
 * @param {string} [data.processingTime] - Request processing duration
 * @param {number} [data.suggestionsCount] - Number of suggestions returned
+* @param {boolean} [data.cacheHit] - Whether data was served from cache
 */
 function logEvent(level, message, data = {}) {
-   // [Your existing logEvent function]
-   // No changes needed here
    const serverInfo = {
        hostname: os.hostname(),
        platform: os.platform(),
@@ -109,7 +120,8 @@ function logEvent(level, message, data = {}) {
        response: data.status ? {
            status: data.status,
            processingTime: data.processingTime,
-           suggestionsCount: data.suggestionsCount
+           suggestionsCount: data.suggestionsCount,
+           cacheHit: data.cacheHit
        } : null,
        serverInfo,
        timestamp: new Date().toISOString()
@@ -187,7 +199,7 @@ function enrichSuggestions(suggestions, query) {
 
 /**
 * Handler for suggestion requests to Funnelback search service
-* Now includes enhanced analytics tracking with session support
+* Now includes enhanced analytics tracking with session support and Redis caching
 * 
 * @param {Object} req - Express request object
 * @param {Object} req.query - Query parameters from the request
@@ -200,6 +212,9 @@ async function handler(req, res) {
    const startTime = Date.now();
    const requestId = req.headers['x-vercel-id'] || Date.now().toString();
    
+   console.log(`DEBUG - suggest.js handler called with requestId: ${requestId}`);
+   console.log(`DEBUG - Request query:`, req.query);
+   
    // Set CORS headers
    res.setHeader('Access-Control-Allow-Origin', 'https://www.seattleu.edu');
    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -210,15 +225,18 @@ async function handler(req, res) {
     (req.headers['x-real-ip']) || 
     req.socket.remoteAddress;
 
-    // Add debug logging
-    console.log('IP Headers:', {
-        originalClientIp: req.headers['x-original-client-ip'],
-        forwardedFor: req.headers['x-forwarded-for'],
-        realIp: req.headers['x-real-ip'],
-        socketRemote: req.socket.remoteAddress,
-        vercelIpCity: req.headers['x-vercel-ip-city'],
-        finalUserIp: userIp
-    });
+   console.log(`[RequestID: ${requestId}] Processing request for ${userIp}`);
+
+
+   // Add debug logging
+   console.log('IP Headers:', {
+       originalClientIp: req.headers['x-original-client-ip'],
+       forwardedFor: req.headers['x-forwarded-for'],
+       realIp: req.headers['x-real-ip'],
+       socketRemote: req.socket.remoteAddress,
+       vercelIpCity: req.headers['x-vercel-ip-city'],
+       finalUserIp: userIp
+   });
 
    if (req.method === 'OPTIONS') {
        logEvent('info', 'OPTIONS request', { 
@@ -227,6 +245,107 @@ async function handler(req, res) {
        });
        res.status(200).end();
        return;
+   }
+
+   // Check caching capability
+   console.log(`DEBUG - About to check if caching is enabled, requestId: ${requestId}`);
+   
+   // Added await here - this is critical
+   const cachingEnabled = await isCachingEnabled();
+   console.log(`DEBUG - Caching enabled result: ${cachingEnabled}`);
+   
+   // Only use caching for queries with 3 or more characters
+    const canUseCache = cachingEnabled && 
+                    (req.query.query || req.query.partial_query) && 
+                    (req.query.query?.length >= 3 || req.query.partial_query?.length >= 3);
+
+    console.log(`DEBUG - Cache parameters check:`, {
+        cachingEnabled,
+        queryExists: !!(req.query.query || req.query.partial_query),
+        queryLength: (req.query.query?.length || req.query.partial_query?.length || 0),
+        canUseCache
+    });
+
+    // Create a stable copy
+    const willUseCache = canUseCache; 
+    console.log(`DEBUG - Cache decision locked: ${willUseCache}`);
+   let cacheHit = false;
+   let enrichedResponse = null;
+   
+   // Try to get data from cache first
+   if (canUseCache) {
+       console.log(`DEBUG - Attempting cache lookup for suggestQuery: ${req.query.query}`);
+       try {
+           // Pass requestId to track cache operations through the request lifecycle
+           console.log(`DEBUG - Calling getCachedData with requestId: ${requestId}`);
+           const cachedData = await getCachedData('suggestions', req.query, requestId);
+           console.log(`DEBUG - getCachedData returned: ${cachedData ? 'data found' : 'no data'}`);
+           
+           if (cachedData) {
+               cacheHit = true;
+               enrichedResponse = cachedData;
+               
+               // Calculate processing time
+               const processingTime = Date.now() - startTime;
+               
+               // Log success explicitly here
+               console.log(`DEBUG - Cache hit successful for suggestions endpoint. Processing time: ${processingTime}ms`);
+               
+               // Add extra cache hit log
+               logCacheHit('suggestions', `suggestions:${JSON.stringify(req.query)}`, {
+                   requestId,
+                   query: req.query,
+                   processingTime: `${processingTime}ms`,
+                   dataSize: `${JSON.stringify(enrichedResponse).length} chars`
+               });
+               
+               // Log cache hit with standard event logging
+               logEvent('info', 'Cache hit for suggestions', {
+                   status: 200,
+                   processingTime: `${processingTime}ms`,
+                   suggestionsCount: enrichedResponse.length || 0,
+                   query: req.query,
+                   headers: req.headers,
+                   cacheHit: true,
+                   requestId: requestId
+               });
+               
+               // Send cached response and continue with analytics recording
+               res.json(enrichedResponse);
+           } else {
+               console.log(`DEBUG - Cache miss for suggestions endpoint`);
+               logCacheMiss('suggestions', `suggestions:${JSON.stringify(req.query)}`, {
+                   requestId,
+                   query: req.query
+               });
+           }
+       } catch (cacheError) {
+           // Added more detailed error logging
+           console.error('DEBUG - Cache error details:', {
+               message: cacheError.message,
+               stack: cacheError.stack,
+               name: cacheError.name
+           });
+           
+           // Log cache error with standardized format
+           logCacheError('suggestions', `suggestions:${JSON.stringify(req.query)}`, {
+               requestId,
+               query: req.query,
+               errorType: cacheError.name,
+               errorMessage: cacheError.message
+           });
+           
+           console.error('Cache error:', cacheError);
+           // Continue with normal request flow
+       }
+   }
+
+   // If we got a cache hit, we only need to record analytics
+   if (cacheHit) {
+       console.log(`DEBUG - Cache hit handling - skipping Funnelback request`);
+       const locationData = await getLocationData(userIp);
+       recordQueryAnalytics(req, locationData, startTime, enrichedResponse, true);
+       return; // Exit early since response already sent
    }
 
    const locationData = await getLocationData(userIp);
@@ -245,16 +364,43 @@ async function handler(req, res) {
         };
         console.log('- Outgoing Headers to Funnelback:', funnelbackHeaders);
 
+        console.log(`DEBUG - Making Funnelback API request to ${funnelbackUrl}`);
         const response = await axios.get(funnelbackUrl, {
             params: req.query,
             headers: funnelbackHeaders
         });
+        console.log(`DEBUG - Funnelback API response status: ${response.status}`);
 
         // Ensure response data is an array (handle API inconsistencies)
         const responseData = Array.isArray(response.data) ? response.data : [];
+        console.log(`DEBUG - Funnelback returned ${responseData.length} results`);
 
         // Enrich suggestions with metadata
-        const enrichedResponse = enrichSuggestions(responseData, req.query);
+        console.log(`DEBUG - Enriching suggestions`);
+        enrichedResponse = enrichSuggestions(responseData, req.query);
+
+        if (willUseCache && enrichedResponse && enrichedResponse.length > 0) {
+            console.log(`DEBUG - Storing enriched response in cache, length: ${enrichedResponse.length}`);
+            
+            try {
+                // Add logging for the exact key being used
+                console.log(`DEBUG - Cache key parameters:`, {
+                    endpoint: 'suggestions',
+                    collection: req.query.collection || 'seattleu~sp-search',
+                    profile: req.query.profile || '_default',
+                    query: req.query.query || req.query.partial_query,
+                    requestId: requestId
+                });
+                
+                // Use the suggestions endpoint identifier to match with the retrieval
+                const cacheResult = await setCachedData('suggestions', req.query, enrichedResponse, requestId);
+                console.log(`DEBUG - Cache set result: ${cacheResult}`);
+            } catch (cacheSetError) {
+                console.error('DEBUG - Error setting cache:', cacheSetError);
+            }
+        } else {
+            console.log(`DEBUG - Skipping cache storage, willUseCache: ${willUseCache}, resultsLength: ${enrichedResponse.length}`);
+        }
 
         // Process time for this request
         const processingTime = Date.now() - startTime;
@@ -264,10 +410,52 @@ async function handler(req, res) {
             processingTime: `${processingTime}ms`,
             suggestionsCount: enrichedResponse.length || 0,
             query: req.query,
-            headers: req.headers
+            headers: req.headers,
+            cacheHit: false,
+            requestId: requestId
         });
 
-    // Record query data for analytics with enhanced debugging
+        // Record analytics data
+        console.log(`DEBUG - Recording analytics`);
+        await recordQueryAnalytics(req, locationData, startTime, enrichedResponse, false);
+  
+        // Send response to client
+        console.log(`DEBUG - Sending response to client, length: ${enrichedResponse.length}`);
+        res.json(enrichedResponse);
+   } catch (error) {
+       console.error('DEBUG - Handler error details:', {
+           message: error.message,
+           stack: error.stack, 
+           name: error.name,
+           responseStatus: error.response?.status,
+           responseData: error.response?.data
+       });
+       
+       logEvent('error', 'Handler error', {
+           query: req.query,
+           error: error.message,
+           status: error.response?.status || 500,
+           processingTime: `${Date.now() - startTime}ms`,
+           headers: req.headers
+       });
+       
+       res.status(500).json({
+           error: 'Suggestion error',
+           details: error.response?.data || error.message
+       });
+   }
+}
+
+/**
+ * Records analytics data for the query
+ * 
+ * @param {Object} req - The request object
+ * @param {Object} locationData - Geo location data
+ * @param {number} startTime - Request start time
+ * @param {Array} enrichedResponse - The response data
+ * @param {boolean} cacheHit - Whether the response was served from cache
+ */
+async function recordQueryAnalytics(req, locationData, startTime, enrichedResponse, cacheHit) {
     try {
         // Log MongoDB URI presence (not the actual value for security)
         console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
@@ -281,6 +469,8 @@ async function handler(req, res) {
                 fromBody: req.body?.sessionId,
                 afterSanitization: sessionId
             });
+
+            const processingTime = Date.now() - startTime;
 
             // Create raw analytics data
             const rawData = {
@@ -302,11 +492,12 @@ async function handler(req, res) {
                 sessionId: sessionId,
                 clickedResults: [], // Ensure field exists
                 enrichmentData: {
-                    totalSuggestions: enrichedResponse.length,
-                    suggestionsData: enrichedResponse.map(s => ({
+                    totalSuggestions: enrichedResponse ? enrichedResponse.length : 0,
+                    suggestionsData: enrichedResponse ? enrichedResponse.map(s => ({
                         display: s.display,
                         tabs: s.metadata.tabs
-                    }))
+                    })) : [],
+                    cacheHit: cacheHit || false
                 },
                 timestamp: new Date()
             };
@@ -348,23 +539,6 @@ async function handler(req, res) {
         // Log analytics error but don't fail the request
         console.error('Analytics preparation error:', analyticsError);
     }
-  
-    // Send response to client
-    res.json(enrichedResponse);
-   } catch (error) {
-       logEvent('error', 'Handler error', {
-           query: req.query,
-           error: error.message,
-           status: error.response?.status || 500,
-           processingTime: `${Date.now() - startTime}ms`,
-           headers: req.headers
-       });
-       
-       res.status(500).json({
-           error: 'Suggestion error',
-           details: error.response?.data || error.message
-       });
-   }
 }
 
 // Export a single function as required by Vercel
