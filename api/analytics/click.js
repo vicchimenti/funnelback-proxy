@@ -5,9 +5,11 @@
  * including click tracking data.
  * 
  * @author Victor Chimenti
- * @version 2.2.2
+ * @version 3.0.0
  * @module api/analytics/click
- * @lastModified 2025-03-16
+ * @environment production
+ * @license MIT
+ * @lastModified 2025-03-23
  */
 
 // api/analytics/click.js
@@ -75,7 +77,19 @@ module.exports = async (req, res) => {
         if (!clickData.clickedUrl) {
             return res.status(400).json({ error: 'Missing required field: clickedUrl' });
         }
-        
+
+        // Validate and set click type
+        if (!clickData.clickType) {
+            // Default to 'search' if not specified
+            clickData.clickType = 'search';
+        } else {
+            // Ensure it's a supported type
+            const validTypes = ['search', 'staff', 'program', 'suggestion'];
+            if (!validTypes.includes(clickData.clickType)) {
+                clickData.clickType = 'search'; // Default if invalid
+            }
+        }
+                
         // Get location data based on the user's IP
         const locationData = await getLocationData(userIp);
         console.log('GeoIP location data:', locationData);
@@ -101,6 +115,7 @@ module.exports = async (req, res) => {
             url: clickData.clickedUrl,
             title: clickData.clickedTitle || '(no title)',
             position: clickData.clickPosition || 'unknown',
+            clickType: clickData.clickType,
             sessionId: clickData.sessionId || 'null'
         });
         
