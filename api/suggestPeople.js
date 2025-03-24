@@ -17,11 +17,11 @@
  * - Analytics integration
  * 
  * @author Victor Chimenti
- * @version 5.0.0
+ * @version 6.0.0
  * @namespace suggestPeople
  * @environment production
  * @license MIT
- * @lastmodified 2025-03-23
+ * @lastmodified 2025-03-24
  */
 
 const axios = require('axios');
@@ -95,7 +95,7 @@ function logEvent(level, message, data = {}) {
 
     const logEntry = {
         service: 'suggest-people',
-        logVersion: '4.2.0',
+        logVersion: '4.3.0',
         timestamp: new Date().toISOString(),
         event: {
             level,
@@ -173,15 +173,24 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedResul
                 timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
                 responseTime: processingTime,
                 resultCount: resultCount,
-                isStaffTab: true,  // This is specifically for staff searches
+                isStaffTab: true,
                 tabs: ['Faculty & Staff'],
                 sessionId: sessionId,
                 enrichmentData: {
-                    cacheHit: cacheHit || false,
-                    resultCount: formattedResults ? formattedResults.length : 0
+                    resultCount: formattedResults ? formattedResults.length : 0,
+                    staffData: formattedResults ? formattedResults.slice(0, 3).map(staff => ({
+                        title: staff.title || '',
+                        position: staff.position || staff.affiliation || '',
+                        department: staff.department || staff.college || '',
+                        url: staff.url || ''
+                    })) : [],
+                    cacheHit: cacheHit || false
                 },
                 timestamp: new Date()
             };
+            
+            // Log the enrichment data explicitly
+            console.log('Enrichment data for MongoDB:', JSON.stringify(rawData.enrichmentData));
             
             // Standardize data to ensure consistent schema
             const analyticsData = createStandardAnalyticsData(rawData);
@@ -196,17 +205,21 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedResul
                 if (recordResult && recordResult._id) {
                     console.log('Analytics record ID:', recordResult._id.toString());
                 }
+                return recordResult;
             } catch (recordError) {
                 console.error('Error recording analytics:', recordError.message);
                 if (recordError.name === 'ValidationError') {
                     console.error('Validation errors:', Object.keys(recordError.errors).join(', '));
                 }
+                return null;
             }
         } else {
             console.log('No MongoDB URI defined, skipping analytics recording');
+            return null;
         }
     } catch (analyticsError) {
         console.error('Analytics error:', analyticsError);
+        return null;
     }
 }
 

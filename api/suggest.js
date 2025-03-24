@@ -18,11 +18,11 @@
 * - Consistent schema handling
 * 
 * @author Victor Chimenti
-* @version 5.0.0
+* @version 6.0.0
 * @namespace suggestionHandler
 * @environment production
 * @license MIT
-* @lastModified 2025-03-23
+* @lastModified 2025-03-24
 */
 
 const axios = require('axios');
@@ -457,7 +457,6 @@ async function handler(req, res) {
  */
 async function recordQueryAnalytics(req, locationData, startTime, enrichedResponse, cacheHit) {
     try {
-        // Log MongoDB URI presence (not the actual value for security)
         console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
         
         if (process.env.MONGODB_URI) {
@@ -490,12 +489,12 @@ async function recordQueryAnalytics(req, locationData, startTime, enrichedRespon
                 isStaffTab: Boolean(req.query['f.Tabs|seattleu~ds-staff']),
                 tabs: [],
                 sessionId: sessionId,
-                clickedResults: [], // Ensure field exists
+                clickedResults: [],
                 enrichmentData: {
                     totalSuggestions: enrichedResponse ? enrichedResponse.length : 0,
                     suggestionsData: enrichedResponse ? enrichedResponse.map(s => ({
-                        display: s.display,
-                        tabs: s.metadata.tabs
+                        display: s.display || '',
+                        tabs: s.metadata?.tabs || []
                     })) : [],
                     cacheHit: cacheHit || false
                 },
@@ -505,6 +504,9 @@ async function recordQueryAnalytics(req, locationData, startTime, enrichedRespon
             // Add tabs information
             if (rawData.isProgramTab) rawData.tabs.push('program-main');
             if (rawData.isStaffTab) rawData.tabs.push('Faculty & Staff');
+            
+            // Log the enrichment data explicitly
+            console.log('Enrichment data for MongoDB:', JSON.stringify(rawData.enrichmentData));
             
             // Standardize data to ensure consistent schema
             const analyticsData = createStandardAnalyticsData(rawData);
@@ -519,6 +521,7 @@ async function recordQueryAnalytics(req, locationData, startTime, enrichedRespon
                 if (recordResult && recordResult._id) {
                     console.log('Analytics record ID:', recordResult._id.toString());
                 }
+                return recordResult;
             } catch (recordError) {
                 console.error('Error recording analytics:', recordError.message);
                 console.error('Full error:', recordError);
@@ -531,15 +534,17 @@ async function recordQueryAnalytics(req, locationData, startTime, enrichedRespon
                 } else if (recordError.name === 'MongoServerError') {
                     console.error('MongoDB server error code:', recordError.code);
                 }
+                return null;
             }
         } else {
             console.log('No MongoDB URI defined, skipping analytics recording');
+            return null;
         }
     } catch (analyticsError) {
         // Log analytics error but don't fail the request
         console.error('Analytics preparation error:', analyticsError);
+        return null;
     }
 }
 
-// Export a single function as required by Vercel
 module.exports = handler;
