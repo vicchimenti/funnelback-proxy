@@ -21,11 +21,11 @@
  * - Session tracking
  * 
  * @author Victor Chimenti
- * @version 6.0.0
+ * @version 6.1.0
  * @namespace suggestPrograms
  * @environment production
  * @license MIT
- * @lastModified 2025-03-24
+ * @lastModified 2025-03-26
  */
 
 const axios = require('axios');
@@ -124,7 +124,7 @@ function logEvent(level, message, data = {}) {
 
     const logEntry = {
         service: 'suggest-programs',
-        version: '4.3.0',
+        version: '6.1.0',
         timestamp: new Date().toISOString(),
         level,
         message,
@@ -189,7 +189,7 @@ function logEvent(level, message, data = {}) {
  * @param {Object} formattedResponse - The formatted response data
  * @param {boolean} cacheHit - Whether response was served from cache
  */
-async function recordQueryAnalytics(req, locationData, startTime, formattedResponse, cacheHit) {
+async function recordQueryAnalytics(req, locationData, startTime, formattedResponse, cacheHit, cacheResult) {
     try {
         console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
         
@@ -220,12 +220,14 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedRespo
                 responseTime: processingTime,
                 resultCount: resultCount,
                 hasResults: resultCount > 0,
-                isProgramTab: true,  // This is specifically for program searches
+                cacheHit: cacheHit,
+                cacheSet: cacheResult,
+                isProgramTab: true,
                 isStaffTab: false,
                 tabs: ['program-main'],
                 sessionId: sessionId,
                 timestamp: new Date(),
-                clickedResults: [], // Initialize empty array to ensure field exists
+                clickedResults: [],
                 enrichmentData: {
                     totalResults: (formattedResponse && formattedResponse.metadata) ? 
                         formattedResponse.metadata.totalResults : 0,
@@ -238,7 +240,8 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedRespo
                         })) : [],
                     queryTime: (formattedResponse && formattedResponse.metadata) ? 
                         formattedResponse.metadata.queryTime : 0,
-                    cacheHit: cacheHit || false
+                    cacheHit: cacheHit || false,
+                    cacheSet: cacheResult || false,
                 }
             };
             
@@ -336,6 +339,7 @@ async function handler(req, res) {
                      req.query.query.length >= 3;
     
     let cacheHit = false;
+    let cacheResult = null;
     let formattedResponse = null;
     
     // Get location data based on the user's IP first
@@ -369,7 +373,7 @@ async function handler(req, res) {
                 res.send(formattedResponse);
                 
                 // Record analytics in background (now locationData is available)
-                recordQueryAnalytics(req, locationData, startTime, formattedResponse, true);
+                recordQueryAnalytics(req, locationData, startTime, formattedResponse, true, null);
                 return; // Exit early since response already sent
             }
         } catch (cacheError) {
@@ -467,11 +471,11 @@ async function handler(req, res) {
                     requestId: requestId
                 });
                 
-                // Use the 'programs' endpoint identifier to match retrieval
-                const cacheResult = await setCachedData('programs', req.query, formattedResponse, requestId);
+                cacheResult = await setCachedData('programs', req.query, formattedResponse, requestId);
                 console.log(`DEBUG - Programs cache set result: ${cacheResult}`);
             } catch (cacheSetError) {
                 console.error('DEBUG - Error setting programs cache:', cacheSetError);
+                cacheResult = false;
             }
         }
         const processingTime = Date.now() - startTime;
@@ -492,7 +496,7 @@ async function handler(req, res) {
         res.send(formattedResponse);
         
         // Record analytics in background
-        recordQueryAnalytics(req, locationData, startTime, formattedResponse, false);
+        recordQueryAnalytics(req, locationData, startTime, formattedResponse, false, cacheResult);
         
     } catch (error) {
         const errorResponse = {

@@ -17,11 +17,11 @@
  * - Analytics integration
  * 
  * @author Victor Chimenti
- * @version 6.0.0
+ * @version 6.1.0
  * @namespace suggestPeople
  * @environment production
  * @license MIT
- * @lastmodified 2025-03-24
+ * @lastmodified 2025-03-26
  */
 
 const axios = require('axios');
@@ -95,7 +95,7 @@ function logEvent(level, message, data = {}) {
 
     const logEntry = {
         service: 'suggest-people',
-        logVersion: '4.3.0',
+        logVersion: '6.1.0',
         timestamp: new Date().toISOString(),
         event: {
             level,
@@ -142,8 +142,10 @@ function cleanTitle(title = '') {
  * @param {number} startTime - Request start time
  * @param {Array} formattedResults - The formatted results
  * @param {boolean} cacheHit - Whether response was served from cache
+ * @param {boolean} cacheResult - Whether caching was successful
+ * @returns {Promise<Object>} The result of the analytics recording
  */
-async function recordQueryAnalytics(req, locationData, startTime, formattedResults, cacheHit) {
+async function recordQueryAnalytics(req, locationData, startTime, formattedResults, cacheHit, cacheResult) {
     try {
         console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
         
@@ -173,6 +175,9 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedResul
                 timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
                 responseTime: processingTime,
                 resultCount: resultCount,
+                hasResults: resultCount > 0,
+                cacheHit: cacheHit,
+                cacheSet: cacheResult,
                 isStaffTab: true,
                 tabs: ['Faculty & Staff'],
                 sessionId: sessionId,
@@ -184,11 +189,12 @@ async function recordQueryAnalytics(req, locationData, startTime, formattedResul
                         department: staff.department || staff.college || '',
                         url: staff.url || ''
                     })) : [],
-                    cacheHit: cacheHit || false
+                    cacheHit: cacheHit || false,
+                    cacheSet: cacheResult || false,
                 },
                 timestamp: new Date()
             };
-            
+                        
             // Log the enrichment data explicitly
             console.log('Enrichment data for MongoDB:', JSON.stringify(rawData.enrichmentData));
             
@@ -257,6 +263,7 @@ async function handler(req, res) {
                      req.query.query.length >= 3;
     
     let cacheHit = false;
+    let cacheResult = null;
     let formattedResults = null;
     const locationData = await getLocationData(userIp);
     console.log('GeoIP location data:', locationData);
@@ -287,7 +294,7 @@ async function handler(req, res) {
                 res.send(formattedResults);
                 
                 // Get location data and record analytics (in background)
-                recordQueryAnalytics(req, locationData, startTime, formattedResults, true);
+                recordQueryAnalytics(req, locationData, startTime, formattedResults, true, null);
                 return; // Exit early since response already sent
             }
         } catch (cacheError) {
@@ -415,11 +422,11 @@ async function handler(req, res) {
                     requestId: requestId
                 });
                 
-                // Use the 'people' endpoint identifier to match retrieval
-                const cacheResult = await setCachedData('people', req.query, formattedResults, requestId);
+                cacheResult = await setCachedData('people', req.query, formattedResults, requestId);
                 console.log(`DEBUG - People cache set result: ${cacheResult}`);
             } catch (cacheSetError) {
                 console.error('DEBUG - Error setting people cache:', cacheSetError);
+                cacheResult = false;
             }
         }
 
@@ -428,7 +435,7 @@ async function handler(req, res) {
         res.send(formattedResults);
         
         // Record analytics (in background)
-        recordQueryAnalytics(req, locationData, startTime, formattedResults, false);
+        recordQueryAnalytics(req, locationData, startTime, formattedResults, false, cacheResult);
 
     } catch (error) {
         // Log detailed error information
