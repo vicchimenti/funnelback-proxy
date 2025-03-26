@@ -1,122 +1,101 @@
-# Funnelback Proxy API
+# Funnelback Search Proxy
 
-A lightweight proxy server system that manages search functionality between Seattle University's frontend applications and Funnelback's search services.
+A specialized proxy system that facilitates communication between Seattle University's frontend applications and Funnelback's search services, with enhanced analytics, caching, and GeoIP features.
+
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
 ## Overview
 
-This API serves as an intermediary layer between client-side applications and Funnelback's search infrastructure, providing specialized endpoints for different search functionalities. The system is designed to handle CORS, manage request forwarding, and ensure proper IP handling while maintaining secure connections to Funnelback's services.
+This API serves as a strategic intermediary layer between client-side applications and Funnelback's search infrastructure. It provides specialized endpoints optimized for different search needs while enhancing performance through Redis caching, collecting detailed analytics via MongoDB, and implementing comprehensive error handling and logging.
 
-## Architecture
+## Key Features
 
-The proxy consists of seven specialized handlers, each serving a specific search functionality:
+- **Redis Caching** - Significantly improves response times for common queries
+- **MongoDB Analytics** - Detailed tracking of search behaviors and user interactions
+- **GeoIP Integration** - Location-aware search results for better relevance
+- **Session Tracking** - Persistent session IDs for analyzing user journeys
+- **Edge Middleware** - Rate limiting and request optimization at the network edge
+- **Specialized Endpoints** - Purpose-built handlers for different search contexts
 
-1. **Main Server** (`server.js`)
-   - Primary entry point for search functionality
-   - Handles core search requests
-   - Manages default parameters and CORS
-   - Base endpoint: `/proxy/funnelback`
+## System Architecture
 
-2. **Search Handler** (`search.js`)
-   - Dedicated to pure search queries
-   - Optimized for search result requests
-   - Endpoint: `/proxy/funnelback/search`
+### API Endpoints
 
-3. **Tools Handler** (`tools.js`)
-   - Manages tool-specific requests
-   - Handles faceted search features
-   - Endpoint: `/proxy/funnelback/tools`
+The proxy is structured around seven specialized handlers:
 
-4. **Spelling Handler** (`spelling.js`)
-   - Processes spelling suggestion requests
-   - Manages partial form parameters
-   - Endpoint: `/proxy/funnelback/spelling`
+| Endpoint | Handler | Purpose |
+|----------|---------|---------|
+| `/proxy/funnelback` | `server.js` | Primary search entry point |
+| `/proxy/funnelback/search` | `search.js` | Dedicated search results handler |
+| `/proxy/funnelback/tools` | `tools.js` | Faceted search and advanced features |
+| `/proxy/funnelback/spelling` | `spelling.js` | Spelling suggestion processing |
+| `/proxy/funnelback/suggest` | `suggest.js` | General autocomplete functionality |
+| `/proxy/suggestPeople` | `suggestPeople.js` | Faculty/staff search specialization |
+| `/proxy/suggestPrograms` | `suggestPrograms.js` | Academic program search specialization |
 
-5. **Suggest Handler** (`suggest.js`)
-   - Handles autocomplete functionality
-   - Provides real-time search suggestions
-   - Endpoint: `/proxy/funnelback/suggest`
+### Analytics Endpoints
 
-6. **People Suggestions** (`suggestPeople.js`)
-   - Specialized handler for faculty/staff searches
-   - Returns detailed personnel information
-   - Endpoint: `/proxy/suggestPeople`
+| Endpoint | Purpose |
+|----------|---------|
+| `/proxy/analytics/click` | Record individual result clicks |
+| `/proxy/analytics/clicks-batch` | Batch processing of click data |
+| `/proxy/analytics/supplement` | Additional analytics collection |
 
-7. **Program Suggestions** (`suggestPrograms.js`)
-   - Dedicated to academic program searches
-   - Returns program-specific metadata
-   - Endpoint: `/proxy/suggestPrograms`
+### Testing/Utility Endpoints
 
-## Frontend Integration
+| Endpoint | Purpose |
+|----------|---------|
+| `/api/queryCount` | Analytics dashboard utilities |
+| `/api/mongoTest` | Database connectivity testing |
+| `/api/testAnalytics` | Analytics system validation |
 
-### Base Configuration
+## Technical Components
 
-```javascript
-const FUNNELBACK_BASE_URL = 'https://your-domain.com/proxy/funnelback';
+### Core Services
+
+1. **Redis Caching Service**
+   - Configurable TTL for different cache types
+   - Automatic key generation based on query parameters
+   - Versioned Redis instances for seamless rotation
+   - Comprehensive logging of cache operations
+
+2. **MongoDB Analytics**
+   - Detailed query tracking with full metadata
+   - Click-through analytics with position tracking
+   - Session-based user journey analysis
+   - Enrichment data for specialized content types
+
+3. **GeoIP Service**
+   - IP-based location detection
+   - Geographic data enrichment for search results
+   - In-memory caching of location data
+   - Timezone-aware search processing
+
+### Middleware System
+
+Edge middleware performs critical functions before requests reach API handlers:
+
+- Rate limiting based on endpoint type
+- IP address preservation for accurate analytics
+- Session ID generation and tracking
+- Request header augmentation
+
+### Request Processing Flow
+
+```markdown
+Client Request → Edge Middleware → Specialized Handler → Redis Cache Check → 
+Funnelback API → Response Formatting → Analytics Recording → Client Response
 ```
-
-### Endpoint Usage
-
-1. **General Search**
-```javascript
-// Basic search request
-const searchResults = await fetch(`${FUNNELBACK_BASE_URL}/search?query=${searchTerm}`);
-```
-
-2. **Autocomplete**
-```javascript
-// Real-time suggestions
-const suggestions = await fetch(`${FUNNELBACK_BASE_URL}/suggest?query=${partialQuery}`);
-```
-
-3. **People Search**
-```javascript
-// Faculty/Staff specific search
-const peopleResults = await fetch(`/proxy/suggestPeople?query=${searchTerm}`);
-```
-
-4. **Program Search**
-```javascript
-// Academic program search
-const programResults = await fetch(`/proxy/suggestPrograms?query=${searchTerm}`);
-```
-
-## Features
-
-### Common Features Across All Handlers
-
-- CORS handling for Seattle University domain
-- Structured JSON logging
-- Comprehensive error handling
-- Request/Response tracking
-- IP forwarding
-- Detailed header management
-
-### Specialized Features
-
-#### People Search
-- Rich metadata including:
-  - Affiliation
-  - Position
-  - Department
-  - College
-  - Profile images
-
-#### Program Search
-- Program-specific data including:
-  - Credential type
-  - School/College
-  - Credit requirements
-  - Study areas
-  - Program mode
 
 ## Response Formats
 
-### People Search Response
+### People Search (`/proxy/suggestPeople`)
+
 ```javascript
 [
   {
     title: "Person Name",
-    affiliation: "Faculty/Staff",
+    affiliation: "Faculty/Staff", 
     position: "Position Title",
     department: "Department Name",
     college: "College Name",
@@ -126,7 +105,8 @@ const programResults = await fetch(`/proxy/suggestPrograms?query=${searchTerm}`)
 ]
 ```
 
-### Program Search Response
+### Program Search (`/proxy/suggestPrograms`)
+
 ```javascript
 {
   metadata: {
@@ -140,12 +120,12 @@ const programResults = await fetch(`/proxy/suggestPrograms?query=${searchTerm}`)
       title: string,
       url: string,
       details: {
-        type: string,
-        school: string,
-        credits: string,
-        area: string,
-        level: string,
-        mode: string
+        type: string,       // Program credential type
+        school: string,     // Provider/school
+        credits: string,    // Required credits
+        area: string,       // Area of study
+        level: string,      // Category/level
+        mode: string        // Program mode
       },
       image: string,
       description: string
@@ -154,107 +134,369 @@ const programResults = await fetch(`/proxy/suggestPrograms?query=${searchTerm}`)
 }
 ```
 
-## Error Handling
+### General Suggestions (`/proxy/funnelback/suggest`)
 
-All endpoints implement consistent error handling:
-- HTTP 500 for server errors
-- Detailed error messages in response
-- Structured error logging
-- Error tracking with request context
+```javascript
+[
+  {
+    display: "Suggestion text",
+    metadata: {
+      tabs: ["tab-name"] // Associated tabs
+    }
+  }
+]
+```
 
-## Security
+## Frontend Integration
 
-- Origin restricted to `https://www.seattleu.edu`
-- IP forwarding for request tracking
-- Sanitized query parameters
-- Protected header handling
+### Base Search Implementation
 
-## Deployment
+```javascript
+// Search configuration
+const SEARCH_CONFIG = {
+  baseUrl: 'https://your-domain.com/proxy/funnelback',
+  collection: 'seattleu~sp-search'
+};
 
-The API is configured for deployment on Vercel with the following route structure:
+// Basic search function
+async function performSearch(query, options = {}) {
+  const params = new URLSearchParams({
+    query,
+    collection: SEARCH_CONFIG.collection,
+    ...options
+  });
+  
+  try {
+    const response = await fetch(`${SEARCH_CONFIG.baseUrl}/search?${params}`);
+    if (!response.ok) throw new Error('Search failed');
+    return await response.json();
+  } catch (error) {
+    console.error('Search error:', error);
+    throw error;
+  }
+}
 
-```json
-{
-    "version": 2,
-    "routes": [
-        { "src": "/proxy/funnelback", "dest": "/api/server.js" },
-        { "src": "/proxy/funnelback/search", "dest": "/api/search.js" },
-        { "src": "/proxy/funnelback/tools", "dest": "/api/tools.js" },
-        { "src": "/proxy/funnelback/spelling", "dest": "/api/spelling.js" },
-        { "src": "/proxy/funnelback/suggest", "dest": "/api/suggest.js" },
-        { "src": "/proxy/suggestPeople", "dest": "/api/suggestPeople.js" },
-        { "src": "/proxy/suggestPrograms", "dest": "/api/suggestPrograms.js" }
-    ]
+// Usage
+const results = await performSearch('computer science', {
+  profile: '_default',
+  form: 'partial'
+});
+```
+
+### Autocomplete Implementation
+
+```javascript
+// Suggestion function with debouncing
+let suggestionTimer;
+async function getSuggestions(query, handler = 'suggest', delay = 300) {
+  // Clear previous timer
+  clearTimeout(suggestionTimer);
+  
+  // Return empty array for short queries
+  if (!query || query.length < 2) return [];
+  
+  // Create a promise that resolves after debounce delay
+  return new Promise(resolve => {
+    suggestionTimer = setTimeout(async () => {
+      try {
+        // Determine correct endpoint
+        const endpoint = handler === 'suggest' 
+          ? '/proxy/funnelback/suggest' 
+          : `/proxy/${handler}`;
+        
+        // Include session ID if available
+        const sessionId = localStorage.getItem('searchSessionId') || null;
+        
+        const params = new URLSearchParams({
+          query,
+          collection: 'seattleu~sp-search',
+          sessionId
+        });
+        
+        const response = await fetch(`${endpoint}?${params}`);
+        if (!response.ok) throw new Error('Suggestion request failed');
+        const data = await response.json();
+        resolve(data);
+      } catch (error) {
+        console.error('Suggestion error:', error);
+        resolve([]);
+      }
+    }, delay);
+  });
+}
+
+// Usage examples
+const peopleSuggestions = await getSuggestions('smith', 'suggestPeople');
+const programSuggestions = await getSuggestions('computer', 'suggestPrograms');
+const generalSuggestions = await getSuggestions('admission', 'suggest');
+```
+
+### Click Tracking Implementation
+
+```javascript
+// Track search result clicks
+async function trackResultClick(resultData) {
+  try {
+    const clickData = {
+      sessionId: localStorage.getItem('searchSessionId'),
+      clickedUrl: resultData.url,
+      clickedTitle: resultData.title,
+      clickPosition: resultData.position,
+      originalQuery: sessionStorage.getItem('lastSearchQuery'),
+      timestamp: new Date().toISOString()
+    };
+    
+    // Send as background request - don't await response
+    fetch('/proxy/analytics/click', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(clickData),
+      // Use keepalive to ensure the request completes even during page transitions
+      keepalive: true
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('Click tracking error:', error);
+    return false;
+  }
 }
 ```
 
-## Dependencies
+## Advanced Features
 
-- axios: HTTP client for making requests to Funnelback
-- os: System information for logging
+### Tab-Specific Search
 
-## Best Practices
+```javascript
+// Program-specific search
+async function searchPrograms(query) {
+  const params = new URLSearchParams({
+    query,
+    collection: 'seattleu~sp-search',
+    'f.Tabs|programMain': true
+  });
+  
+  const response = await fetch(`/proxy/funnelback/search?${params}`);
+  return await response.json();
+}
 
-1. Always include error handling in frontend implementations
-2. Use appropriate endpoints for specific search types
-3. Implement query parameter sanitization
-4. Handle response processing asynchronously
-5. Implement proper loading states in UI
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/your-username/funnelback-proxy.git
-
-# Navigate to the project directory
-cd funnelback-proxy
-
-# Install dependencies
-npm install
-
-# For production dependencies only
-npm install --production
+// Faculty/Staff search
+async function searchStaff(query) {
+  const params = new URLSearchParams({
+    query,
+    collection: 'seattleu~sp-search',
+    'f.Tabs|seattleu~ds-staff': 'Faculty & Staff'
+  });
+  
+  const response = await fetch(`/proxy/funnelback/search?${params}`);
+  return await response.json();
+}
 ```
 
-## Environment Variables
+### Session Handling
 
-Create a `.env` file in the root directory with the following variables:
+```javascript
+// Initialize or retrieve session ID
+function getSearchSessionId() {
+  let sessionId = localStorage.getItem('searchSessionId');
+  
+  if (!sessionId) {
+    sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    localStorage.setItem('searchSessionId', sessionId);
+  }
+  
+  return sessionId;
+}
 
-```bash
+// Add session ID to all search requests
+function addSessionToRequest(url) {
+  const sessionId = getSearchSessionId();
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}sessionId=${sessionId}`;
+}
+```
+
+## Configuration
+
+### Environment Variables
+
+```markdown
 # Funnelback Configuration
 FUNNELBACK_BASE_URL=https://dxp-us-search.funnelback.squiz.cloud/s
 ALLOWED_ORIGIN=https://www.seattleu.edu
 
+# Redis Configuration (Caching)
+REDIS_URL=redis://username:password@hostname:port
+# OR using versioned instances for rotation
+REDIS_URL_V1=redis://username:password@hostname:port
+REDIS_URL_V2=redis://username:password@hostname:port
+REDIS_URL_ACTIVE=REDIS_URL_V2
+
+# MongoDB Configuration (Analytics)
+MONGODB_URI=mongodb+srv://username:password@hostname/database
+
 # Server Configuration
-NODE_ENV=development
-PORT=3000
-
-# Optional Logging Configuration
-LOG_LEVEL=info
-ENABLE_REQUEST_LOGGING=true
+NODE_ENV=production
 ```
 
-## Development
+### Vercel Configuration
 
-```bash
-# Run in development mode with hot reload
-npm run dev
+The project includes a `vercel.json` file that configures routing for the serverless functions:
 
-# Run in production mode
-npm start
-
-# Lint the code
-npm run lint
-
-# Fix linting issues
-npm run lint:fix
+```json
+{
+    "version": 2,
+    "rewrites": [
+        { "source": "/proxy/funnelback", "destination": "/api/server.js" },
+        { "source": "/proxy/funnelback/search", "destination": "/api/search.js" },
+        { "source": "/proxy/funnelback/tools", "destination": "/api/tools.js" },
+        ...
+    ],
+    "headers": [
+        {
+            "source": "/proxy/analytics/(.*)",
+            "headers": [
+                { "key": "Access-Control-Allow-Credentials", "value": "true" },
+                ...
+            ]
+        }
+    ]
+}
 ```
 
-## Recommended Testing
+## Security Features
 
-### Testing Setup
-To implement testing for this API, we recommend setting up:
+- **Rate Limiting** - Prevents abuse with endpoint-specific limits
+- **CORS Restriction** - Limited to Seattle University domain
+- **IP Tracking** - Preserves original client IP for accurate analytics
+- **Header Sanitization** - Ensures clean request headers
+- **Error Handling** - Comprehensive error handling across all handlers
+
+## Caching TTL Strategy
+
+Different TTLs based on content type:
+
+| Content Type | TTL | Rationale |
+|--------------|-----|-----------|
+| Suggestions | 1 hour | Frequently changing |
+| Programs | 24 hours | Relatively stable |
+| People | 12 hours | Moderately stable |
+| Default | 30 minutes | Conservative default |
+
+Caching is only applied to queries with 3+ characters to avoid caching potentially low-quality results.
+
+## Analytics Schema
+
+The system records detailed analytics in MongoDB with this structure:
+
+```javascript
+{
+  // Base query information
+  handler: String,         // Which handler processed the request
+  query: String,           // The actual search query
+  searchCollection: String, // Funnelback collection used
+  
+  // User information (anonymized)
+  userAgent: String,
+  referer: String,
+  sessionId: String,
+  
+  // Location information
+  city: String,
+  region: String,
+  country: String,
+  timezone: String,
+  
+  // Search results information
+  responseTime: Number,    // Processing time in ms
+  resultCount: Number,     // Number of results returned
+  hasResults: Boolean,     // Whether any results were found
+  cacheHit: Boolean,       // Whether result came from cache
+  
+  // Tab-specific information
+  isProgramTab: Boolean,
+  isStaffTab: Boolean,
+  tabs: [String],
+  
+  // Enrichment data (content-specific)
+  enrichmentData: Object,
+  
+  // Click tracking
+  clickedResults: [{
+    url: String,
+    title: String,
+    position: Number,
+    timestamp: Date
+  }],
+  
+  // Timestamps
+  timestamp: Date,
+  lastClickTimestamp: Date
+}
+```
+
+## Performance Considerations
+
+This system is optimized for high performance:
+
+1. **Edge Processing** - Critical functions (rate limiting, session tracking) performed at the edge
+2. **Redis Caching** - Dramatically reduces load on Funnelback API
+3. **Asynchronous Analytics** - Background processing of analytics data
+4. **Connection Pooling** - Efficient database connections
+5. **Request Timeouts** - Prevents hanging connections
+6. **Error Recovery** - Graceful handling of service disruptions
+
+## Error Handling
+
+All endpoints implement standardized error handling:
+
+- HTTP 500 for server-side errors
+- Detailed error messages in response
+- Structured error logging with context
+- Cache fallbacks when possible
+
+## Development Guidelines
+
+### Code Organization
+
+```
+/
+├── api/                   # API endpoint handlers
+│   ├── search.js          # Dedicated search handler
+│   ├── suggest.js         # Suggestion handler
+│   ├── suggestPeople.js   # People-specific handler  
+│   ├── suggestPrograms.js # Program-specific handler
+│   ├── tools.js           # Tools handler
+│   ├── spelling.js        # Spelling suggestions
+│   └── server.js          # Main server handler
+│
+├── lib/                   # Shared libraries
+│   ├── cacheService.js    # Redis caching functionality
+│   ├── redisClient.js     # Redis connection management
+│   ├── geoIpService.js    # IP-based location detection
+│   ├── queryAnalytics.js  # MongoDB analytics integration
+│   ├── queryMiddleware.js # Query processing middleware
+│   └── schemaHandler.js   # Schema validation/handling
+│
+├── middleware.js          # Edge middleware for Vercel
+├── vercel.json            # Vercel configuration
+├── package.json           # Dependencies
+└── README.md              # Documentation
+```
+
+### Coding Standards
+
+1. **Documentation** - All files include comprehensive JSDoc headers
+2. **Error Handling** - Every function includes proper error handling
+3. **Logging** - Structured JSON logging for serverless environment
+4. **Schema Validation** - Consistent data structure validation
+5. **Caching Awareness** - Cache-aware code with proper invalidation
+
+## Testing
+
+For testing this API:
 
 ```bash
 # Install testing dependencies
@@ -270,178 +512,290 @@ npm install --save-dev jest supertest nock
 }
 ```
 
-### Suggested Test Structure
+### Key Testing Areas
 
-```
-tests/
-├── unit/
-│   ├── handlers/
-│   │   ├── suggestPeople.test.js
-│   │   ├── suggestPrograms.test.js
-│   │   └── suggest.test.js
-│   └── utils/
-│       └── logEvent.test.js
-├── integration/
-│   └── endpoints.test.js
-└── mocks/
-    └── funnelbackResponses.js
-```
+1. **Handler Functions** - Test data transformation
+2. **Error Handling** - Verify proper error responses
+3. **Caching Logic** - Test cache hits, misses and expirations
+4. **Analytics Recording** - Validate data structure
+5. **Edge Middleware** - Test rate limiting functionality
 
-### Key Areas to Test
-
-1. **Handler Functions**
-   ```javascript
-   // Example test for suggestPeople.js
-   describe('People Suggestion Handler', () => {
-     test('should clean and format personnel data', () => {
-       // Test cleanTitle function
-     });
-
-     test('should handle missing metadata fields', () => {
-       // Test null/undefined handling
-     });
-
-     test('should properly enrich suggestions', () => {
-       // Test data enrichment
-     });
-   });
-   ```
-
-2. **Error Handling**
-   ```javascript
-   // Example error handling test
-   describe('Error Handling', () => {
-     test('should handle Funnelback API errors gracefully', () => {
-       // Mock failed API response
-     });
-
-     test('should return appropriate status codes', () => {
-       // Test various error scenarios
-     });
-   });
-   ```
-
-3. **CORS and Headers**
-   ```javascript
-   // Example CORS test
-   describe('CORS Handling', () => {
-     test('should set correct CORS headers', () => {
-       // Verify headers for seattleu.edu
-     });
-   });
-   ```
-
-4. **Request Validation**
-   ```javascript
-   // Example validation test
-   describe('Request Validation', () => {
-     test('should validate required parameters', () => {
-       // Test parameter validation
-     });
-   });
-   ```
-
-### Mocking External Services
+### Example Test Cases
 
 ```javascript
-// Example using nock to mock Funnelback API
-const nock = require('nock');
-
-beforeAll(() => {
-  nock('https://dxp-us-search.funnelback.squiz.cloud')
-    .get('/s/search.json')
-    .query(true)
-    .reply(200, {
-      // Mock response data
+// Test suggestion handler
+describe('Suggestion Handler', () => {
+  test('should return enriched suggestions', async () => {
+    // Mock request
+    const req = { 
+      query: { query: 'computer' },
+      headers: { 'user-agent': 'test-agent' }
+    };
+    const res = { 
+      setHeader: jest.fn(),
+      json: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      send: jest.fn()
+    };
+    
+    // Mock Funnelback response
+    axios.get.mockResolvedValueOnce({
+      status: 200,
+      data: ['computer science', 'computer engineering']
     });
+    
+    // Call handler
+    await handler(req, res);
+    
+    // Assertions
+    expect(res.json).toHaveBeenCalled();
+    const result = res.json.mock.calls[0][0];
+    expect(result.length).toBe(2);
+    expect(result[0].display).toBe('computer science');
+  });
 });
 ```
 
-### Performance Testing
+## Deployment
 
-Consider implementing load tests using Artillery or k6:
+### Vercel Deployment
 
-```javascript
-// k6 example script
-import http from 'k6/http';
+1. Connect your repository to Vercel
+2. Set environment variables in Vercel dashboard
+3. Deploy using the Vercel CLI:
 
-export default function() {
-  http.get('http://localhost:3000/proxy/suggestPeople?query=test');
-}
+```bash
+# Install Vercel CLI
+npm install -g vercel
 
-export const options = {
-  vus: 10,
-  duration: '30s',
-};
+# Deploy to production
+vercel --prod
 ```
 
-These tests will help ensure:
-- Correct data transformation
-- Proper error handling
-- API reliability
-- Performance under load
-- CORS compliance
-- Header management
+### Required Setup
 
-## Repository Usage
+1. **Redis Instance** - For caching
+2. **MongoDB Atlas** - For analytics
+3. **Vercel Account** - For serverless deployment
+4. **Funnelback API Access** - For search backend
 
-This repository is connected directly to production systems. Access is restricted to authorized collaborators only.
+## Monitoring and Maintenance
 
-### For Collaborators
+### Key Metrics to Monitor
 
-Authorized collaborators must follow these guidelines when working with the repository:
+1. **Cache Hit Ratio** - Target >80% for suggestion endpoints
+2. **API Response Times** - Target <200ms for cached responses
+3. **Error Rates** - Target <0.1% of total requests
+4. **Rate Limit Hits** - Should be near-zero in normal operation
 
-1. Clone the repository directly:
+### Log Analysis
+
+The system includes structured JSON logging designed for extraction to analytics tools:
+
+```javascript
+{
+  "service": "suggest-programs",
+  "version": "6.1.0",
+  "timestamp": "2025-03-26T10:15:30Z",
+  "level": "info",
+  "message": "Programs search completed",
+  "performance": {
+    "duration": "125ms",
+    "status": 200,
+    "cacheHit": true
+  },
+  "userIp": "[redacted]",
+  "location": {
+    "city": "Seattle",
+    "region": "Washington",
+    "country": "US"
+  }
+}
+```
+
+### Cache Maintenance
+
+Redis cache requires periodic management:
+
+1. **Cache Rotation** - Using versioned Redis URLs (REDIS_URL_V1, REDIS_URL_V2)
+2. **Selective Invalidation** - When content changes
+3. **Monitoring** - Observing hit/miss ratios
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Missing Response Headers**
+   - Check CORS configuration in vercel.json
+   - Verify middleware is properly setting headers
+
+2. **Cache Inconsistencies**
+   - Verify Redis connection string
+   - Check if Redis instance is running
+   - Implement cache invalidation for affected keys
+
+3. **Slow Response Times**
+   - Identify Redis connectivity issues
+   - Check MongoDB connection pool
+   - Verify Funnelback API response times
+   - Check for rate limiting issues
+
+4. **Analytics Not Recording**
+   - Validate MongoDB connection string
+   - Check schema validation errors in logs
+   - Verify session ID generation
+
+## Performance Optimization
+
+### Caching Strategy
+
+The system implements a sophisticated caching approach:
+
+1. **Selective Caching** - Only cache queries with 3+ characters
+2. **Content-Based TTL** - Different TTLs based on content volatility
+3. **Cache Key Generation** - Based on endpoint and query parameters
+4. **Cache Hit Logging** - For monitoring performance
+
+### Request Optimization
+
+1. **Debouncing** - For suggestion endpoints
+2. **Reduced Payload Size** - Trimming unnecessary data
+3. **Response Compression** - For larger responses
+4. **Header Optimization** - Minimizing header size
+
+## Security Guidelines
+
+1. **Rate Limiting** - Prevents abuse with graduated thresholds
+2. **CORS Restrictions** - Limited to approved domains
+3. **IP Preservation** - For accurate analytics and abuse prevention
+4. **No PII Storage** - Personal data is anonymized
+5. **Headers Sanitization** - Prevents header injection attacks
+
+## Contribution Guidelines
+
+### Repository Access
+
+- Read/Write access: Restricted to authorized collaborators
+- Deploy access: Restricted to production systems
+- Branch protection: Enabled on main branch
+
+### For Contributors
+
+1. Clone the repository:
+
    ```bash
-   git clone https://github.com/your-username/funnelback-proxy.git
+   git clone https://github.com/username/funnelback-proxy.git
    ```
 
-2. Always create a new branch for changes:
+2. Create a new branch:
+
    ```bash
    git checkout -b feature/description-of-change
    ```
 
-3. Commit standards:
-   ```bash
-   # Format: type(scope): description
-   git commit -m "feat(suggestPeople): add new metadata field for department"
-   git commit -m "fix(server): correct CORS header handling"
-   ```
+3. Make changes following code standards
 
-4. Testing changes:
-   - Test all changes thoroughly in development environment
-   - Verify CORS functionality with seattleu.edu domain
-   - Check all error handling scenarios
-   - Validate logging output
+4. Write tests for new functionality
 
-5. Deployment process:
-   - Merges to main branch automatically deploy to production
-   - All changes must be reviewed by at least one other collaborator
-   - Deploy during low-traffic periods when possible
+5. Submit a pull request with detailed description
 
-### Security Notes
+### Commit Message Format
 
-- Never commit sensitive data or credentials
-- Keep your access tokens secure
-- Report security concerns immediately to the repository owner
-- Regular security audits are conducted on all commits
+```markdown
+type(scope): description
 
-### Repository Access
+- feat(suggestPeople): add department field to response
+- fix(caching): resolve issue with cache key generation
+- docs(readme): update API documentation
+- refactor(middleware): improve rate limiting logic
+```
 
-- Read/Write access: Restricted to authorized collaborators only
-- Deploy access: Restricted to production systems
-- Branch protection: Enabled on main branch
+## API Reference
 
-For questions or access requests, contact the repository owner.
+### Search Endpoint
 
-## Versioning
+```markdown
+GET /proxy/funnelback/search
+```
 
-We use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/your-username/funnelback-proxy/tags).
+**Parameters:**
+
+- `query` (string, required) - Search query
+- `collection` (string) - Funnelback collection (default: 'seattleu~sp-search')
+- `profile` (string) - Search profile (default: '_default')
+- `form` (string) - Result format (default: 'partial')
+- `sessionId` (string) - Session identifier
+
+**Response:** HTML search results
+
+### Suggestion Endpoint
+
+```markdown
+GET /proxy/funnelback/suggest
+```
+
+**Parameters:**
+
+- `query` (string, required) - Partial search query
+- `collection` (string) - Funnelback collection
+- `sessionId` (string) - Session identifier
+
+**Response:** Array of enriched suggestions
+
+### People Suggestion Endpoint
+
+```markdown
+GET /proxy/suggestPeople
+```
+
+**Parameters:**
+
+- `query` (string, required) - Partial search query
+- `sessionId` (string) - Session identifier
+
+**Response:** Array of people objects with metadata
+
+### Program Suggestion Endpoint
+
+```markdown
+GET /proxy/suggestPrograms
+```
+
+**Parameters:**
+
+- `query` (string, required) - Partial search query
+- `sessionId` (string) - Session identifier
+
+**Response:** Object with metadata and program array
+
+### Click Tracking Endpoint
+
+```markdown
+POST /proxy/analytics/click
+```
+
+**Request Body:**
+
+```json
+{
+  "sessionId": "string",
+  "clickedUrl": "string",
+  "clickedTitle": "string",
+  "clickPosition": "number",
+  "originalQuery": "string"
+}
+```
+
+**Response:** Status object
 
 ## License
 
-MIT License - See LICENSE file for details
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Author
+## Authors
 
-Victor Chimenti
+- Victor Chimenti
+
+## Acknowledgments
+
+- Funnelback Search API
