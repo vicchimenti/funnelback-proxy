@@ -1,38 +1,39 @@
 /**
  * @fileoverview Dedicated Search Results Proxy Server - Enhanced with Analytics
- * 
+ *
  * Handles specific search result requests for the Funnelback integration.
- * Enhanced with session tracking and improved analytics integration.
- * 
+ * Enhanced with consistent IP tracking, session management, and improved analytics.
+ *
  * Features:
- * - CORS handling
+ * - CORS handling with standardized headers
  * - Search-specific parameter management
- * - Detailed logging of search requests
- * - Enhanced analytics with session tracking
+ * - Detailed logging using common utilities
+ * - Enhanced analytics with consistent schema
  * - Click-through attribution
- * - Consistent schema handling
+ * - Session tracking with consistent ID management
  * - GeoIP-based location tracking
- * 
+ * - Consistent IP extraction across all request types
+ *
  * @author Victor Chimenti
  * @namespace searchHandler
- * @version 4.1.0
+ * @version 5.1.0
  * @license MIT
- * @lastModified 2025-03-18
+ * @lastModified 2025-04-30
  */
 
-const axios = require('axios');
-const { getLocationData } = require('../lib/geoIpService');
-const { recordQuery } = require('../lib/queryAnalytics');
-const { 
-    createStandardAnalyticsData, 
-    sanitizeSessionId, 
-    logAnalyticsData 
-} = require('../lib/schemaHandler');
-
+const axios = require("axios");
+const { getLocationData } = require("../lib/geoIpService");
+const { recordQuery } = require("../lib/queryAnalytics");
+const commonUtils = require("../lib/commonUtils");
+const {
+    createStandardAnalyticsData,
+    createRequestAnalytics,
+    logAnalyticsData,
+} = require("../lib/schemaHandler");
 
 /**
  * Extracts the number of results from an HTML response
- * 
+ *
  * @param {string} htmlContent - The HTML response from Funnelback
  * @returns {number} The number of results, or 0 if not found
  */
@@ -41,17 +42,17 @@ function extractResultCount(htmlContent) {
         // Look for result count in HTML response
         const match = htmlContent.match(/totalMatching">([0-9,]+)</);
         if (match && match[1]) {
-            return parseInt(match[1].replace(/,/g, ''), 10);
+            return parseInt(match[1].replace(/,/g, ""), 10);
         }
     } catch (error) {
-        console.error('Error extracting result count:', error);
+        console.error("Error extracting result count:", error);
     }
     return 0;
 }
 
 /**
  * Handler for dedicated search requests.
- * 
+ *
  * @param {Object} req - Express request object
  * @param {Object} req.query - Query parameters from the request
  * @param {Object} req.headers - Request headers
@@ -61,142 +62,224 @@ function extractResultCount(htmlContent) {
  */
 async function handler(req, res) {
     const startTime = Date.now();
+    const requestId = commonUtils.getRequestId(req);
 
-    // Get client IP from custom header or fallback methods
-    const userIp = req.headers['x-original-client-ip'] || 
-               (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
-               (req.headers['x-real-ip']) || 
-               req.socket.remoteAddress;
+    // CRITICAL: Extract the true end-user IP with highest priority
+    const clientIp = commonUtils.extractClientIp(req);
 
-    // Add debug logging
-    console.log('IP Headers:', {
-        originalClientIp: req.headers['x-original-client-ip'],
-        forwardedFor: req.headers['x-forwarded-for'],
-        realIp: req.headers['x-real-ip'],
-        socketRemote: req.socket.remoteAddress,
-        vercelIpCity: req.headers['x-vercel-ip-city'],
-        finalUserIp: userIp
+    // Log full IP information for debugging including all potential IP sources
+    commonUtils.logFullIpInfo(req, "search-handler", requestId);
+
+    // Standard log with redacted IP (for security/privacy)
+    commonUtils.logEvent("info", "request_received", "search-handler", {
+        requestId,
+        path: req.path,
+        query: req.query.query || null,
+        clientIp, // Will be redacted in standard logs
     });
-    
-    // Set CORS headers
-    res.setHeader('Access-Control-Allow-Origin', 'https://www.seattleu.edu');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') {
+    // Extract session information
+    const sessionInfo = commonUtils.extractSessionInfo(req);
+    commonUtils.logSessionHandling(req, sessionInfo, "search-handler", requestId);
+
+    // Set CORS headers
+    commonUtils.setCorsHeaders(res);
+
+    // Handle OPTIONS requests
+    if (req.method === "OPTIONS") {
+        commonUtils.logEvent("info", "options_request", "search-handler", {
+            requestId,
+        });
         res.status(200).end();
         return;
     }
 
     try {
-        const funnelbackUrl = 'https://dxp-us-search.funnelback.squiz.cloud/s/search.html';
+        const funnelbackUrl =
+            "https://dxp-us-search.funnelback.squiz.cloud/s/search.html";
 
-        // Get location data based on the user's IP
-        const locationData = await getLocationData(userIp);
-        console.log('GeoIP location data:', locationData);
+        // Get location data based on the ACTUAL USER IP - Critical for consistency
+        let locationData = null;
+        try {
+            // Use true user IP for location lookup, not server/edge IPs
+            locationData = await getLocationData(clientIp);
+            commonUtils.logEvent(
+                "debug",
+                "location_data_retrieved",
+                "search-handler",
+                {
+                    requestId,
+                    clientIp: clientIp, // Log which IP was used for lookup
+                    location: {
+                        city: locationData.city,
+                        region: locationData.region,
+                        country: locationData.country,
+                    },
+                }
+            );
+        } catch (geoError) {
+            commonUtils.logEvent("warn", "location_data_failed", "search-handler", {
+                requestId,
+                error: geoError.message,
+            });
+            // Set default empty location data
+            locationData = {
+                city: null,
+                region: null,
+                country: null,
+                timezone: null,
+            };
+        }
 
+        // CRITICAL: Create outgoing headers with the TRUE USER IP in X-Forwarded-For
+        // This ensures Funnelback gets the actual client IP, not our server IP
         const funnelbackHeaders = {
-            'Accept': 'text/html',
-            'X-Forwarded-For': userIp,
-            'X-Geo-City': locationData.city,
-            'X-Geo-Region': locationData.region,
-            'X-Geo-Country': locationData.country,
-            'X-Geo-Timezone': locationData.timezone
+            Accept: "text/html",
+            // Essential for Funnelback location detection - must be end user IP
+            "X-Forwarded-For": clientIp,
+            // Additional headers for our own tracking across service boundaries
+            "X-Original-Client-Ip": clientIp,
+            "X-Real-Ip": clientIp,
+            // Forward location data if already determined
+            "X-Geo-City": locationData.city || "",
+            "X-Geo-Region": locationData.region || "",
+            "X-Geo-Country": locationData.country || "",
+            "X-Geo-Timezone": locationData.timezone || "",
+            "X-Request-ID": requestId,
         };
-        console.log('- Outgoing Headers to Funnelback (with actual user location):', funnelbackHeaders);
+
+        // Log detailed headers for debugging
+        console.log(`- Outgoing Headers to Funnelback:`, {
+            funnelbackHeaders,
+        });
+
+        // Log outgoing request with IP verification
+        commonUtils.logEvent("info", "outgoing_request", "search-handler", {
+            requestId,
+            url: funnelbackUrl,
+            query: req.query.query || "",
+            outgoingClientIp: clientIp, // Log which IP we're sending
+        });
 
         const response = await axios.get(funnelbackUrl, {
             params: req.query,
-            headers: funnelbackHeaders
+            headers: funnelbackHeaders,
         });
 
-        console.log('Search response received successfully');
-        
+        // Log successful response
+        commonUtils.logEvent("info", "funnelback_response", "search-handler", {
+            requestId,
+            status: response.status,
+            contentLength: response.data?.length || 0,
+        });
+
         // Extract the result count from the HTML response
         const resultCount = extractResultCount(response.data);
         const processingTime = Date.now() - startTime;
-        
+
         // Record analytics data
         try {
-            console.log('MongoDB URI defined:', !!process.env.MONGODB_URI);
-            
-            if (process.env.MONGODB_URI) {
-                // Extract query from query parameters - looking at both query and partial_query
-                console.log('Raw query parameters:', req.query);
-                console.log('Looking for query in:', req.query.query, req.query.partial_query);
-                
-                // Extract and sanitize session ID
-                const sessionId = sanitizeSessionId(req.query.sessionId || req.headers['x-session-id']);
-                console.log('Extracted session ID:', sessionId);
+            commonUtils.logEvent("info", "recording_analytics", "search-handler", {
+                requestId,
+                query: req.query.query,
+                resultCount,
+            });
 
-                // Add detailed session ID debugging
-                console.log('Session ID sources:', {
-                    fromQueryParam: req.query.sessionId,
-                    fromHeader: req.headers['x-session-id'],
-                    fromBody: req.body?.sessionId,
-                    afterSanitization: sessionId
-                });
-                
-                // Create raw analytics data
-                const rawData = {
-                    handler: 'search',
-                    query: req.query.query || req.query.partial_query || '[empty query]',
-                    searchCollection: req.query.collection || 'seattleu~sp-search',
-                    userAgent: req.headers['user-agent'],
-                    referer: req.headers.referer,
-                    city: locationData.city || decodeURIComponent(req.headers['x-vercel-ip-city'] || ''),
-                    region: locationData.region || req.headers['x-vercel-ip-country-region'],
-                    country: locationData.country || req.headers['x-vercel-ip-country'],
-                    timezone: locationData.timezone || req.headers['x-vercel-ip-timezone'],
-                    responseTime: processingTime,
+            if (process.env.MONGODB_URI) {
+                // Create base analytics data from request
+                const baseData = createRequestAnalytics(
+                    req,
+                    locationData,
+                    "search",
+                    startTime
+                );
+
+                // Add search-specific data
+                const analyticsData = {
+                    ...baseData,
                     resultCount: resultCount,
                     hasResults: resultCount > 0,
-                    isProgramTab: Boolean(req.query['f.Tabs|programMain']),
-                    isStaffTab: Boolean(req.query['f.Tabs|seattleu~ds-staff']),
-                    tabs: [],
-                    sessionId: sessionId,
-                    timestamp: new Date(),
-                    clickedResults: []
+                    enrichmentData: {
+                        searchParams: req.query,
+                        resultCount: resultCount,
+                        responseTime: processingTime,
+                    },
                 };
-                
-                // Add tabs information
-                if (rawData.isProgramTab) rawData.tabs.push('program-main');
-                if (rawData.isStaffTab) rawData.tabs.push('Faculty & Staff');
-                
-                // Standardize data to ensure consistent schema
-                const analyticsData = createStandardAnalyticsData(rawData);
-                
-                // Log data (excluding sensitive information)
-                logAnalyticsData(analyticsData, 'search recording');
-                
+
+                // Standardize and validate data
+                const standardData = createStandardAnalyticsData(analyticsData);
+
+                // Log analytics data (excluding sensitive information)
+                logAnalyticsData(standardData, "search-handler");
+
                 // Record the analytics
                 try {
-                    const recordResult = await recordQuery(analyticsData);
-                    console.log('Analytics record result:', recordResult ? 'Saved' : 'Not saved');
-                    if (recordResult && recordResult._id) {
-                        console.log('Analytics record ID:', recordResult._id.toString());
-                    }
+                    const recordResult = await recordQuery(standardData);
+                    commonUtils.logEvent("info", "analytics_recorded", "search-handler", {
+                        requestId,
+                        success: !!recordResult,
+                        recordId: recordResult?._id?.toString(),
+                    });
                 } catch (recordError) {
-                    console.error('Error recording analytics:', recordError.message);
-                    if (recordError.name === 'ValidationError') {
-                        console.error('Validation errors:', Object.keys(recordError.errors).join(', '));
-                    }
+                    commonUtils.logEvent(
+                        "error",
+                        "analytics_record_error",
+                        "search-handler",
+                        {
+                            requestId,
+                            error: recordError.message,
+                        }
+                    );
                 }
             } else {
-                console.log('No MongoDB URI defined, skipping analytics recording');
+                commonUtils.logEvent("info", "analytics_skipped", "search-handler", {
+                    requestId,
+                    reason: "mongodb_uri_not_defined",
+                });
             }
         } catch (analyticsError) {
-            console.error('Analytics error:', analyticsError);
+            commonUtils.logEvent("error", "analytics_error", "search-handler", {
+                requestId,
+                error: analyticsError.message,
+            });
         }
-        
+
+        // Log complete response
+        commonUtils.logEvent("info", "request_completed", "search-handler", {
+            requestId,
+            status: response.status,
+            processingTime: `${processingTime}ms`,
+            resultCount: resultCount,
+        });
+
+        // Send response to client with request ID
+        res.setHeader("X-Request-ID", requestId);
         res.send(response.data);
     } catch (error) {
-        console.error('Error in search handler:', {
-            message: error.message,
-            status: error.response?.status,
-            data: error.response?.data
+        // Handle errors using common utils
+        const errorInfo = commonUtils.formatError(
+            error,
+            "search-handler",
+            "search_request_failed",
+            requestId
+        );
+
+        // Log additional context for debugging
+        commonUtils.logEvent("error", "request_failed", "search-handler", {
+            requestId,
+            query: req.query.query,
+            status: error.response?.status || 500,
+            errorDetails: {
+                message: error.message,
+                responseStatus: error.response?.status,
+                axiosError: error.isAxiosError,
+            },
         });
-        res.status(500).send('Search error: ' + (error.response?.data || error.message));
+
+        // Send error response
+        res
+            .status(errorInfo.status)
+            .send("Search error: " + (error.response?.data || error.message));
     }
 }
 
